@@ -24,6 +24,19 @@ O site começa vazio. Para trazer seus dados, use **Importar JSON**.
 Nos campos de valor pode digitar do jeito que preferir: `11700`, `11.700`,
 `1.234,56` ou até `R$ 11.700`.
 
+### Levar para o celular
+
+**Enviar para outro aparelho** gera um link com o orçamento inteiro dentro dele.
+Abra esse link no celular e confirme a importação. Se couber, aparece também um
+QR code na tela — é só apontar a câmera.
+
+Os dados viajam no fragmento do link (a parte depois do `#`), que o navegador
+**nunca envia ao servidor**. Então nada passa pelo GitHub nem por qualquer outro
+lugar. Em compensação, quem tiver o link vê o orçamento: mande só para você mesmo.
+
+Não é sincronização contínua — é um empurrão de um aparelho para o outro, na hora
+que você quiser. Se editar nos dois lados, o último link enviado é o que vale.
+
 > Os dados ficam salvos no `localStorage` do navegador — ou seja, só naquele
 > navegador, naquele aparelho. Trocou de celular ou limpou os dados do site,
 > os números somem. Por isso vale exportar o JSON de vez em quando.

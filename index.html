@@ -109,6 +109,18 @@
   .sc-delta{font-size:11px;color:var(--muted)}
   .note{margin-top:32px;font-size:11px;color:var(--muted);text-align:center}
 
+  /* transferência */
+  .share{background:#fff;border-radius:12px;padding:16px;margin-bottom:24px;
+         box-shadow:0 2px 10px rgba(43,38,34,.06);
+         display:flex;flex-direction:column;gap:10px}
+  .share-title{font-size:13px;font-weight:700}
+  .share-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .share-row .in{flex:1;min-width:200px;font-size:12px;
+                 font-family:ui-monospace,Consolas,monospace}
+  .hint{font-size:11px;color:var(--muted);line-height:1.5}
+  .qr{display:flex;justify-content:center;padding:14px 0}
+  .qr img,.qr canvas{display:block;width:240px;height:240px;image-rendering:pixelated}
+
   @media (max-width:640px){
     body{padding:24px 14px 60px}
     h1{font-size:26px}
@@ -133,8 +145,11 @@
     <label class="link" style="cursor:pointer">Importar JSON
       <input id="importFile" type="file" accept="application/json" hidden>
     </label>
+    <button class="link" data-action="share">Enviar para outro aparelho</button>
     <button class="link danger" data-action="reset">Zerar tudo</button>
   </div>
+
+  <div class="share" id="sharePanel" hidden></div>
 
   <div class="summary">
     <div>
@@ -447,6 +462,20 @@ document.addEventListener("click", function(e){
   }else if(a === "export"){
     exportJSON();
 
+  }else if(a === "share"){
+    toggleShare();
+
+  }else if(a === "copy-link"){
+    var inp = document.getElementById("shareUrl");
+    if(!inp) return;
+    var ok = false;
+    try{ inp.select(); ok = document.execCommand("copy"); }catch(e){}
+    if(!ok && navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(inp.value); ok = true;
+    }
+    el.textContent = ok ? "Copiado!" : "Copie à mão";
+    setTimeout(function(){ el.textContent = "Copiar"; }, 1600);
+
   }else if(a === "reset"){
     if(!confirm("Zerar tudo? Isso remove categorias, cotações e combinações salvas.")) return;
     state = normalize({}); resetUI(); persist();
@@ -535,10 +564,199 @@ document.getElementById("importFile").addEventListener("change", function(e){
   reader.readAsText(file);
 });
 
+/* ---------- transferência por link ----------
+
+   O link leva os dados no fragmento (#d=...), que o navegador NUNCA envia ao
+   servidor — então nada disso passa pelo GitHub.
+
+   Para o link ficar curto, os dados são reempacotados por posição, sem os ids:
+     { v, t: meta, c: [[nome,[[fornecedor,preço,notas],…]],…],
+       s: [índice da cotação escolhida em cada categoria, -1 = nenhuma],
+       n: [[nome da combinação, [índices…]],…] }
+   Os ids são recriados na importação.                                        */
+
+function pack(st){
+  var qIdx = {};
+  var c = st.categories.map(function(cat){
+    qIdx[cat.id] = {};
+    return [cat.name, cat.quotes.map(function(q, i){
+      qIdx[cat.id][q.id] = i;
+      return q.notes ? [q.supplier, q.price, q.notes] : [q.supplier, q.price];
+    })];
+  });
+  var sel = function(s){
+    return st.categories.map(function(cat){
+      var i = qIdx[cat.id][s[cat.id]];
+      return i === undefined ? -1 : i;
+    });
+  };
+  return { v:1, t:st.budgetTarget, c:c, s:sel(st.selections),
+           n:st.scenarios.map(function(sc){ return [sc.name, sel(sc.selections || {})]; }) };
+}
+
+function unpack(p){
+  if(!p || !Array.isArray(p.c)) throw new Error("formato desconhecido");
+  var categories = p.c.map(function(e){
+    return { id: uid(), name: String(e[0]), quotes: (e[1] || []).map(function(q){
+      return { id: uid(), supplier: String(q[0]), price: Number(q[1]) || 0,
+               notes: q[2] ? String(q[2]) : "" };
+    })};
+  });
+  var sel = function(arr){
+    var out = {};
+    categories.forEach(function(cat, ci){
+      var i = arr && arr[ci];
+      out[cat.id] = (i != null && i >= 0 && cat.quotes[i]) ? cat.quotes[i].id : "";
+    });
+    return out;
+  };
+  return {
+    categories: categories,
+    selections: sel(p.s),
+    scenarios: (p.n || []).map(function(e){
+      return { id: uid(), name: String(e[0]), selections: sel(e[1]), createdAt: Date.now() };
+    }),
+    budgetTarget: Number(p.t) || 0
+  };
+}
+
+function bytesToB64u(b){
+  var s = "";
+  for(var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+  return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+function b64uToBytes(str){
+  var s = str.replace(/-/g,"+").replace(/_/g,"/");
+  while(s.length % 4) s += "=";
+  var bin = atob(s), out = new Uint8Array(bin.length);
+  for(var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+var temZip = (typeof CompressionStream !== "undefined" && typeof DecompressionStream !== "undefined");
+
+function zip(str){
+  var st = new Blob([str]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  return new Response(st).arrayBuffer().then(function(b){ return new Uint8Array(b); });
+}
+function unzip(bytes){
+  var st = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return new Response(st).text();
+}
+
+/* "z" = comprimido, "r" = cru (navegador sem CompressionStream) */
+function encodePayload(st){
+  var json = JSON.stringify(pack(st));
+  if(!temZip) return Promise.resolve("r" + bytesToB64u(new TextEncoder().encode(json)));
+  return zip(json).then(function(b){ return "z" + bytesToB64u(b); });
+}
+function decodePayload(raw){
+  var bytes = b64uToBytes(raw.slice(1));
+  var p = raw.charAt(0) === "z" ? unzip(bytes)
+        : Promise.resolve(new TextDecoder().decode(bytes));
+  return p.then(function(json){ return unpack(JSON.parse(json)); });
+}
+
+function buildLink(){
+  return encodePayload(state).then(function(payload){
+    return location.origin + location.pathname + "#d=" + payload;
+  });
+}
+
+/* O QR é opcional: a biblioteca só é buscada quando você abre o painel, e se
+   ela não carregar (sem internet) o link continua funcionando normalmente. */
+function loadQRLib(){
+  if(window.QRCode) return Promise.resolve(true);
+  return new Promise(function(res){
+    var s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
+    s.onload = function(){ res(!!window.QRCode); };
+    s.onerror = function(){ res(false); };
+    document.head.appendChild(s);
+  });
+}
+
+var LIMITE_QR = 1800;
+
+function renderQR(url, box){
+  if(url.length > LIMITE_QR){
+    box.innerHTML = '<div class="hint">Seu or&ccedil;amento est&aacute; grande demais para caber num QR leg&iacute;vel '
+      + '(' + url.length + ' caracteres, o limite pr&aacute;tico &eacute; ~' + LIMITE_QR + '). '
+      + 'Use o link acima &mdash; ele funciona em qualquer tamanho.</div>';
+    return;
+  }
+  box.innerHTML = '<div class="hint">Carregando QR&hellip;</div>';
+  loadQRLib().then(function(ok){
+    if(!ok){
+      box.innerHTML = '<div class="hint">N&atilde;o consegui carregar o gerador de QR (sem internet?). Use o link acima.</div>';
+      return;
+    }
+    box.innerHTML = '<div class="qr" id="qrTarget"></div>'
+      + '<div class="hint" style="text-align:center">Aponte a c&acirc;mera do celular</div>';
+    try{
+      new window.QRCode(document.getElementById("qrTarget"), {
+        text: url, width: 240, height: 240,
+        correctLevel: window.QRCode.CorrectLevel.L
+      });
+    }catch(e){
+      box.innerHTML = '<div class="hint">N&atilde;o consegui gerar o QR para esse tamanho de dados. Use o link acima.</div>';
+    }
+  });
+}
+
+function toggleShare(){
+  var el = document.getElementById("sharePanel");
+  if(!el.hidden){ el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  el.innerHTML = '<div class="hint">Gerando link&hellip;</div>';
+
+  buildLink().then(function(url){
+    el.innerHTML =
+        '<div class="share-title">Enviar para outro aparelho</div>'
+      + '<div class="share-row">'
+        + '<input class="in" id="shareUrl" readonly value="' + esc(url) + '">'
+        + '<button class="btn" data-action="copy-link">Copiar</button>'
+        + '<button class="link" data-action="share">fechar</button>'
+      + '</div>'
+      + '<div class="hint">Abra este link no outro aparelho e confirme a importa&ccedil;&atilde;o. '
+        + 'Os dados v&atilde;o dentro do pr&oacute;prio link (' + (url.length / 1024).toFixed(1) + ' KB) '
+        + 'e <b>n&atilde;o passam por nenhum servidor</b> &mdash; mas qualquer pessoa com o link v&ecirc; seu or&ccedil;amento, '
+        + 'ent&atilde;o mande s&oacute; para voc&ecirc; mesmo.</div>'
+      + '<div id="qrBox"></div>';
+    renderQR(url, document.getElementById("qrBox"));
+  }).catch(function(){
+    el.innerHTML = '<div class="hint">N&atilde;o consegui gerar o link.</div>';
+  });
+}
+
+function importFromHash(){
+  var m = /[#&]d=([A-Za-z0-9_-]+)/.exec(location.hash || "");
+  if(!m) return Promise.resolve(false);
+  return decodePayload(m[1]).then(function(novo){
+    var n = novo.categories.length;
+    if(!confirm("Este link traz " + n + " categoria(s). Importar e substituir o que está neste aparelho?"))
+      return false;
+    state = normalize(novo);
+    resetUI(); persist();
+    return true;
+  }).catch(function(){
+    alert("O link de transferência está inválido ou incompleto.");
+    return false;
+  });
+}
+
 /* ---------- início ---------- */
 
 elMeta.value = state.budgetTarget;
 render();
+
+importFromHash().then(function(importou){
+  if(!importou) return;
+  elMeta.value = state.budgetTarget;
+  render();
+  /* limpa o #d= para um F5 não reimportar */
+  try{ history.replaceState(null, "", location.pathname + location.search); }catch(e){}
+});
 
 })();
 </script>
