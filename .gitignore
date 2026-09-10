@@ -1,0 +1,9 @@
+# Exports do próprio app — contêm seus valores reais, não devem ir para o repositório
+orcamento*.json
+budget*.json
+*.backup.json
+
+# Windows / macOS / OneDrive
+Thumbs.db
+desktop.ini
+.DS_Store
