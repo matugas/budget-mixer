@@ -15,7 +15,11 @@ Dá para abrir com dois cliques no seu computador ou hospedar em qualquer lugar.
 - **Adicionar** cotação ou categoria: botões pontilhados `+`.
 - **Meta**: digite o valor no topo — a diferença fica verde (dentro) ou vermelha (acima).
 - **Combinações salvas**: guarde um conjunto de escolhas com um nome e volte a
-  ele depois com "Carregar". Ótimo para comparar cenários.
+  ele depois com "Carregar". Cada card mostra a data em que foi salva e tem um
+  **ver resumo**, que abre a lista "categoria: escolha" daquela combinação.
+- **Comparar todas**: com duas ou mais combinações salvas, esse botão abre uma
+  tabela com elas lado a lado. As linhas em que as combinações divergem ficam
+  marcadas com ▸; as iguais ficam esmaecidas, para o olho ir direto no que muda.
 - **Exportar / Importar JSON**: para fazer backup ou levar os dados para outro
   navegador, celular ou computador.
 
